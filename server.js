@@ -361,3 +361,15 @@ const checkAndLosePoints = () => {
     alert(`⚠️ Вы пропустили несколько дней! Уровень сброшен до 1`);
   }
 };
+// Получить прогресс другого пользователя
+app.get('/api/users/:userId/progress', auth, async (req, res) => {
+  const { userId } = req.params;
+  const db = await initDb();
+  
+  const progress = await db.get(
+    'SELECT points, level FROM user_progress WHERE user_id = ?',
+    [userId]
+  );
+  
+  res.json(progress || { points: 0, level: 1 });
+});
