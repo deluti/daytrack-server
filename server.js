@@ -331,3 +331,33 @@ initDb().then(() => {
     console.log(`✅ Сервер запущен на порту ${PORT}`);
   });
 });
+
+// Проверка и потеря очков при пропуске дня
+const checkAndLosePoints = () => {
+  if (!lastRatedDate) return;
+  
+  const last = new Date(lastRatedDate);
+  const now = new Date();
+  const lastMSK = new Date(last.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+  const nowMSK = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+  
+  const daysPassed = Math.floor((nowMSK - lastMSK) / (1000 * 60 * 60 * 24));
+  
+  // Если пропущен 1 день - штраф 5 очков
+  if (daysPassed === 1 && canGetPoint()) {
+    const newPoints = Math.max(0, points - 5);
+    const newLevel = Math.floor(newPoints / 30) + 1;
+    setPoints(newPoints);
+    setLevel(newLevel);
+    saveProgressToServer(newPoints, newLevel, lastRatedDate);
+    alert(`⚠️ Вы пропустили день! -5 очков. Уровень: ${newLevel}`);
+  }
+  // Если пропущено 2+ дня - сброс до 0
+  else if (daysPassed >= 2) {
+    setPoints(0);
+    setLevel(1);
+    setLastRatedDate(null);
+    saveProgressToServer(0, 1, null);
+    alert(`⚠️ Вы пропустили несколько дней! Уровень сброшен до 1`);
+  }
+};
