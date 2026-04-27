@@ -30,7 +30,7 @@ app.get('/', (req, res) => {
       'GET /api/test',
       'POST /api/auth/register', 
       'POST /api/auth/login',
-      'GET /api/users',
+      'GET /api/users/search?q=username',
       'GET /api/users/:userId/profile',
       'GET /api/user/progress',
       'POST /api/user/progress'
@@ -204,13 +204,27 @@ app.put('/api/user/profile', auth, async (req, res) => {
 
 // ========== ПРОСМОТР ДРУГИХ ПОЛЬЗОВАТЕЛЕЙ ==========
 
-// Получить список пользователей
-app.get('/api/users', auth, async (req, res) => {
+// ПОИСК ПОЛЬЗОВАТЕЛЕЙ (по вводу)
+app.get('/api/users/search', auth, async (req, res) => {
+  const { q } = req.query;
   const db = await initDb();
+  
+  if (!q || q.length < 2) {
+    return res.json([]);
+  }
+  
   const users = await db.all(
-    'SELECT id, username, avatar FROM users WHERE id != ? ORDER BY username',
-    [req.userId]
+    `SELECT u.id, u.username, u.avatar, 
+            COALESCE(up.points, 0) as points, 
+            COALESCE(up.level, 1) as level 
+     FROM users u
+     LEFT JOIN user_progress up ON u.id = up.user_id
+     WHERE u.username LIKE ? AND u.id != ?
+     ORDER BY u.username
+     LIMIT 20`,
+    [`%${q}%`, req.userId]
   );
+  
   res.json(users);
 });
 
@@ -227,18 +241,12 @@ app.get('/api/users/:userId/profile', auth, async (req, res) => {
     [userId]
   );
   
-  const progress = await db.get(
-    'SELECT points, level FROM user_progress WHERE user_id = ?',
-    [userId]
-  );
-  
   res.json({
     user,
     stats: {
       avgRating: stats.avgRating || 0,
       totalDays: stats.totalDays || 0
-    },
-    progress: progress || { points: 0, level: 1 }
+    }
   });
 });
 
@@ -256,19 +264,6 @@ app.get('/api/users/:userId/ratings/:year/:month', auth, async (req, res) => {
   );
   
   res.json(ratings);
-});
-
-// Поиск пользователей
-app.get('/api/users/search', auth, async (req, res) => {
-  const { q } = req.query;
-  const db = await initDb();
-  
-  const users = await db.all(
-    'SELECT id, username, avatar FROM users WHERE username LIKE ? AND id != ? LIMIT 20',
-    [`%${q}%`, req.userId]
-  );
-  
-  res.json(users);
 });
 
 // ========== ПРОГРЕСС (ОЧКИ И УРОВНИ) ==========
@@ -330,46 +325,4 @@ initDb().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ Сервер запущен на порту ${PORT}`);
   });
-});
-
-// Проверка и потеря очков при пропуске дня
-const checkAndLosePoints = () => {
-  if (!lastRatedDate) return;
-  
-  const last = new Date(lastRatedDate);
-  const now = new Date();
-  const lastMSK = new Date(last.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-  const nowMSK = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-  
-  const daysPassed = Math.floor((nowMSK - lastMSK) / (1000 * 60 * 60 * 24));
-  
-  // Если пропущен 1 день - штраф 5 очков
-  if (daysPassed === 1 && canGetPoint()) {
-    const newPoints = Math.max(0, points - 5);
-    const newLevel = Math.floor(newPoints / 30) + 1;
-    setPoints(newPoints);
-    setLevel(newLevel);
-    saveProgressToServer(newPoints, newLevel, lastRatedDate);
-    alert(`⚠️ Вы пропустили день! -5 очков. Уровень: ${newLevel}`);
-  }
-  // Если пропущено 2+ дня - сброс до 0
-  else if (daysPassed >= 2) {
-    setPoints(0);
-    setLevel(1);
-    setLastRatedDate(null);
-    saveProgressToServer(0, 1, null);
-    alert(`⚠️ Вы пропустили несколько дней! Уровень сброшен до 1`);
-  }
-};
-// Получить прогресс другого пользователя
-app.get('/api/users/:userId/progress', auth, async (req, res) => {
-  const { userId } = req.params;
-  const db = await initDb();
-  
-  const progress = await db.get(
-    'SELECT points, level FROM user_progress WHERE user_id = ?',
-    [userId]
-  );
-  
-  res.json(progress || { points: 0, level: 1 });
 });
