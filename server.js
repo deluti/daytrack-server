@@ -31,7 +31,9 @@ app.get('/', (req, res) => {
       'POST /api/auth/register', 
       'POST /api/auth/login',
       'GET /api/users',
-      'GET /api/users/:userId/profile'
+      'GET /api/users/:userId/profile',
+      'GET /api/user/progress',
+      'POST /api/user/progress'
     ]
   });
 });
@@ -63,6 +65,16 @@ async function initDb() {
       rating REAL NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id),
       UNIQUE(user_id, date)
+    );
+    
+    CREATE TABLE IF NOT EXISTS user_progress (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      points INTEGER DEFAULT 0,
+      level INTEGER DEFAULT 1,
+      last_rated_date TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      UNIQUE(user_id)
     );
   `);
   return db;
@@ -157,45 +169,10 @@ app.get('/api/ratings/stats', auth, async (req, res) => {
     [req.userId]
   );
   
-  const allRatings = await db.all(
-    'SELECT date FROM ratings WHERE user_id = ? ORDER BY date',
-    [req.userId]
-  );
-  
-  let maxStreak = 0;
-  let currentStreak = 1;
-  
-  if (allRatings.length > 0) {
-    for (let i = 1; i < allRatings.length; i++) {
-      const prevDate = new Date(allRatings[i-1].date);
-      const currDate = new Date(allRatings[i].date);
-      const diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
-      
-      if (diffDays === 1) {
-        currentStreak++;
-      } else {
-        maxStreak = Math.max(maxStreak, currentStreak);
-        currentStreak = 1;
-      }
-    }
-    maxStreak = Math.max(maxStreak, currentStreak);
-  }
-  
   res.json({
     avgRating: avg.avgRating || 0,
-    totalDays: avg.totalDays || 0,
-    maxStreak: maxStreak
+    totalDays: avg.totalDays || 0
   });
-});
-
-// ВСЕ ОЦЕНКИ ДЛЯ ГРАФИКА
-app.get('/api/ratings/all', auth, async (req, res) => {
-  const db = await initDb();
-  const ratings = await db.all(
-    'SELECT date, rating FROM ratings WHERE user_id = ? ORDER BY date',
-    [req.userId]
-  );
-  res.json(ratings);
 });
 
 // ========== ПРОФИЛЬ ==========
@@ -205,17 +182,29 @@ app.put('/api/user/profile', auth, async (req, res) => {
   const { username, avatar } = req.body;
   const db = await initDb();
   
-  await db.run(
-    'UPDATE users SET username = ?, avatar = ? WHERE id = ?',
-    [username, avatar, req.userId]
-  );
-  
-  res.json({ success: true });
+  try {
+    if (username) {
+      const existing = await db.get('SELECT id FROM users WHERE username = ? AND id != ?', [username, req.userId]);
+      if (existing) {
+        return res.status(400).json({ error: 'Имя пользователя уже занято' });
+      }
+      await db.run('UPDATE users SET username = ? WHERE id = ?', [username, req.userId]);
+    }
+    
+    if (avatar) {
+      await db.run('UPDATE users SET avatar = ? WHERE id = ?', [avatar, req.userId]);
+    }
+    
+    const updatedUser = await db.get('SELECT id, username, avatar FROM users WHERE id = ?', [req.userId]);
+    res.json({ success: true, user: updatedUser });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ========== ПРОСМОТР ДРУГИХ ПОЛЬЗОВАТЕЛЕЙ ==========
 
-// Получить список пользователей (для поиска)
+// Получить список пользователей
 app.get('/api/users', auth, async (req, res) => {
   const db = await initDb();
   const users = await db.all(
@@ -230,11 +219,7 @@ app.get('/api/users/:userId/profile', auth, async (req, res) => {
   const { userId } = req.params;
   const db = await initDb();
   
-  const user = await db.get(
-    'SELECT id, username, avatar FROM users WHERE id = ?',
-    [userId]
-  );
-  
+  const user = await db.get('SELECT id, username, avatar FROM users WHERE id = ?', [userId]);
   if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
   
   const stats = await db.get(
@@ -242,37 +227,18 @@ app.get('/api/users/:userId/profile', auth, async (req, res) => {
     [userId]
   );
   
-  const allRatings = await db.all(
-    'SELECT date FROM ratings WHERE user_id = ? ORDER BY date',
+  const progress = await db.get(
+    'SELECT points, level FROM user_progress WHERE user_id = ?',
     [userId]
   );
-  
-  let maxStreak = 0;
-  let currentStreak = 1;
-  
-  if (allRatings.length > 0) {
-    for (let i = 1; i < allRatings.length; i++) {
-      const prevDate = new Date(allRatings[i-1].date);
-      const currDate = new Date(allRatings[i].date);
-      const diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
-      
-      if (diffDays === 1) {
-        currentStreak++;
-      } else {
-        maxStreak = Math.max(maxStreak, currentStreak);
-        currentStreak = 1;
-      }
-    }
-    maxStreak = Math.max(maxStreak, currentStreak);
-  }
   
   res.json({
     user,
     stats: {
       avgRating: stats.avgRating || 0,
-      totalDays: stats.totalDays || 0,
-      maxStreak: maxStreak
-    }
+      totalDays: stats.totalDays || 0
+    },
+    progress: progress || { points: 0, level: 1 }
   });
 });
 
@@ -305,37 +271,63 @@ app.get('/api/users/search', auth, async (req, res) => {
   res.json(users);
 });
 
+// ========== ПРОГРЕСС (ОЧКИ И УРОВНИ) ==========
+
+// Получить прогресс пользователя
+app.get('/api/user/progress', auth, async (req, res) => {
+  const db = await initDb();
+  
+  let progress = await db.get(
+    'SELECT points, level, last_rated_date FROM user_progress WHERE user_id = ?',
+    [req.userId]
+  );
+  
+  if (!progress) {
+    await db.run(
+      'INSERT INTO user_progress (user_id, points, level) VALUES (?, 0, 1)',
+      [req.userId]
+    );
+    progress = { points: 0, level: 1, last_rated_date: null };
+  }
+  
+  res.json(progress);
+});
+
+// Обновить прогресс пользователя
+app.post('/api/user/progress', auth, async (req, res) => {
+  const { points, level, last_rated_date } = req.body;
+  const db = await initDb();
+  
+  await db.run(
+    `INSERT INTO user_progress (user_id, points, level, last_rated_date) 
+     VALUES (?, ?, ?, ?) 
+     ON CONFLICT(user_id) DO UPDATE SET 
+       points = excluded.points, 
+       level = excluded.level, 
+       last_rated_date = excluded.last_rated_date`,
+    [req.userId, points, level, last_rated_date]
+  );
+  
+  res.json({ success: true });
+});
+
+// Получить прогресс другого пользователя
+app.get('/api/users/:userId/progress', auth, async (req, res) => {
+  const { userId } = req.params;
+  const db = await initDb();
+  
+  const progress = await db.get(
+    'SELECT points, level FROM user_progress WHERE user_id = ?',
+    [userId]
+  );
+  
+  res.json(progress || { points: 0, level: 1 });
+});
+
 // ========== ЗАПУСК СЕРВЕРА ==========
 const PORT = process.env.PORT || 5000;
 initDb().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ Сервер запущен на порту ${PORT}`);
   });
-});
-
-// ОБНОВИТЬ ПРОФИЛЬ (изменить имя пользователя)
-app.put('/api/user/profile', auth, async (req, res) => {
-  const { username, avatar } = req.body;
-  const db = await initDb();
-  
-  try {
-    // Проверяем, не занято ли новое имя
-    if (username) {
-      const existing = await db.get('SELECT id FROM users WHERE username = ? AND id != ?', [username, req.userId]);
-      if (existing) {
-        return res.status(400).json({ error: 'Имя пользователя уже занято' });
-      }
-      await db.run('UPDATE users SET username = ? WHERE id = ?', [username, req.userId]);
-    }
-    
-    if (avatar) {
-      await db.run('UPDATE users SET avatar = ? WHERE id = ?', [avatar, req.userId]);
-    }
-    
-    // Получаем обновленного пользователя
-    const updatedUser = await db.get('SELECT id, username, avatar FROM users WHERE id = ?', [req.userId]);
-    res.json({ success: true, user: updatedUser });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 });
