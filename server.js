@@ -56,6 +56,8 @@ function auth(req, res, next) {
   }
 }
 
+// ========== АУТЕНТИФИКАЦИЯ ==========
+
 // РЕГИСТРАЦИЯ
 app.post('/api/auth/register', async (req, res) => {
   const { username, password } = req.body;
@@ -85,6 +87,8 @@ app.post('/api/auth/login', async (req, res) => {
   const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'secret123');
   res.json({ token, user: { id: user.id, username: user.username, avatar: user.avatar } });
 });
+
+// ========== ОЦЕНКИ ==========
 
 // СОХРАНИТЬ ОЦЕНКУ
 app.post('/api/ratings/rate', auth, async (req, res) => {
@@ -135,19 +139,21 @@ app.get('/api/ratings/stats', auth, async (req, res) => {
   let maxStreak = 0;
   let currentStreak = 1;
   
-  for (let i = 1; i < allRatings.length; i++) {
-    const prevDate = new Date(allRatings[i-1].date);
-    const currDate = new Date(allRatings[i].date);
-    const diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
-    
-    if (diffDays === 1) {
-      currentStreak++;
-    } else {
-      maxStreak = Math.max(maxStreak, currentStreak);
-      currentStreak = 1;
+  if (allRatings.length > 0) {
+    for (let i = 1; i < allRatings.length; i++) {
+      const prevDate = new Date(allRatings[i-1].date);
+      const currDate = new Date(allRatings[i].date);
+      const diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
+      
+      if (diffDays === 1) {
+        currentStreak++;
+      } else {
+        maxStreak = Math.max(maxStreak, currentStreak);
+        currentStreak = 1;
+      }
     }
+    maxStreak = Math.max(maxStreak, currentStreak);
   }
-  maxStreak = Math.max(maxStreak, currentStreak);
   
   res.json({
     avgRating: avg.avgRating || 0,
@@ -166,6 +172,8 @@ app.get('/api/ratings/all', auth, async (req, res) => {
   res.json(ratings);
 });
 
+// ========== ПРОФИЛЬ ==========
+
 // ОБНОВИТЬ ПРОФИЛЬ
 app.put('/api/user/profile', auth, async (req, res) => {
   const { username, avatar } = req.body;
@@ -179,21 +187,7 @@ app.put('/api/user/profile', auth, async (req, res) => {
   res.json({ success: true });
 });
 
-// В самом конце файла server.js, перед app.listen
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`✅ Сервер запущен на порту ${PORT}`);
-});
-
-// Запуск сервера
-const PORT = process.env.PORT || 5000;
-initDb().then(() => {
-  app.listen(PORT, () => {
-    console.log(`✅ Сервер запущен на http://localhost:${PORT}`);
-  });
-});
-
-// ========== НОВЫЕ МАРШРУТЫ ДЛЯ ПРОСМОТРА ПРОФИЛЕЙ ==========
+// ========== ПРОСМОТР ДРУГИХ ПОЛЬЗОВАТЕЛЕЙ ==========
 
 // Получить список пользователей (для поиска)
 app.get('/api/users', auth, async (req, res) => {
@@ -217,13 +211,11 @@ app.get('/api/users/:userId/profile', auth, async (req, res) => {
   
   if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
   
-  // Статистика пользователя
   const stats = await db.get(
     'SELECT AVG(rating) as avgRating, COUNT(*) as totalDays FROM ratings WHERE user_id = ?',
     [userId]
   );
   
-  // Максимальная серия
   const allRatings = await db.all(
     'SELECT date FROM ratings WHERE user_id = ? ORDER BY date',
     [userId]
@@ -232,19 +224,21 @@ app.get('/api/users/:userId/profile', auth, async (req, res) => {
   let maxStreak = 0;
   let currentStreak = 1;
   
-  for (let i = 1; i < allRatings.length; i++) {
-    const prevDate = new Date(allRatings[i-1].date);
-    const currDate = new Date(allRatings[i].date);
-    const diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
-    
-    if (diffDays === 1) {
-      currentStreak++;
-    } else {
-      maxStreak = Math.max(maxStreak, currentStreak);
-      currentStreak = 1;
+  if (allRatings.length > 0) {
+    for (let i = 1; i < allRatings.length; i++) {
+      const prevDate = new Date(allRatings[i-1].date);
+      const currDate = new Date(allRatings[i].date);
+      const diffDays = (currDate - prevDate) / (1000 * 60 * 60 * 24);
+      
+      if (diffDays === 1) {
+        currentStreak++;
+      } else {
+        maxStreak = Math.max(maxStreak, currentStreak);
+        currentStreak = 1;
+      }
     }
+    maxStreak = Math.max(maxStreak, currentStreak);
   }
-  maxStreak = Math.max(maxStreak, currentStreak);
   
   res.json({
     user,
@@ -283,4 +277,12 @@ app.get('/api/users/search', auth, async (req, res) => {
   );
   
   res.json(users);
+});
+
+// ========== ЗАПУСК СЕРВЕРА (ТОЛЬКО ОДИН РАЗ!) ==========
+const PORT = process.env.PORT || 5000;
+initDb().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Сервер запущен на порту ${PORT}`);
+  });
 });
