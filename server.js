@@ -7,13 +7,34 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
+
+// ========== CORS ==========
 app.use(cors({
   origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json());
+
+// ========== ТЕСТОВЫЕ МАРШРУТЫ ==========
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'Сервер работает!', status: 'ok', time: new Date().toISOString() });
+});
+
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'DayTrack API сервер работает', 
+    endpoints: [
+      'GET /api/test',
+      'POST /api/auth/register', 
+      'POST /api/auth/login',
+      'GET /api/users',
+      'GET /api/users/:userId/profile'
+    ]
+  });
+});
 
 // Инициализация базы данных
 async function openDb() {
@@ -284,7 +305,7 @@ app.get('/api/users/search', auth, async (req, res) => {
   res.json(users);
 });
 
-// ========== ЗАПУСК СЕРВЕРА (ТОЛЬКО ОДИН РАЗ!) ==========
+// ========== ЗАПУСК СЕРВЕРА ==========
 const PORT = process.env.PORT || 5000;
 initDb().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
