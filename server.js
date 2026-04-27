@@ -312,3 +312,30 @@ initDb().then(() => {
     console.log(`✅ Сервер запущен на порту ${PORT}`);
   });
 });
+
+// ОБНОВИТЬ ПРОФИЛЬ (изменить имя пользователя)
+app.put('/api/user/profile', auth, async (req, res) => {
+  const { username, avatar } = req.body;
+  const db = await initDb();
+  
+  try {
+    // Проверяем, не занято ли новое имя
+    if (username) {
+      const existing = await db.get('SELECT id FROM users WHERE username = ? AND id != ?', [username, req.userId]);
+      if (existing) {
+        return res.status(400).json({ error: 'Имя пользователя уже занято' });
+      }
+      await db.run('UPDATE users SET username = ? WHERE id = ?', [username, req.userId]);
+    }
+    
+    if (avatar) {
+      await db.run('UPDATE users SET avatar = ? WHERE id = ?', [avatar, req.userId]);
+    }
+    
+    // Получаем обновленного пользователя
+    const updatedUser = await db.get('SELECT id, username, avatar FROM users WHERE id = ?', [req.userId]);
+    res.json({ success: true, user: updatedUser });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
