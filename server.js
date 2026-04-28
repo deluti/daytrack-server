@@ -21,9 +21,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// ИСПРАВЛЕННАЯ функция - month от 1 до 12
 function getLastDayOfMonth(year, month) {
-  // month - фактический номер месяца (1-12)
   return new Date(year, month, 0).getDate();
 }
 
@@ -136,7 +134,7 @@ app.post('/api/ratings/rate', auth, async (req, res) => {
   }
 });
 
-// ПОЛУЧИТЬ ОЦЕНКИ ЗА МЕСЯЦ (ИСПРАВЛЕНО)
+// ПОЛУЧИТЬ ОЦЕНКИ ЗА МЕСЯЦ (ИСПРАВЛЕНО - возвращает дату в формате YYYY-MM-DD)
 app.get('/api/ratings/month/:year/:month', auth, async (req, res) => {
   const { year, month } = req.params;
   const client = await pool.connect();
@@ -148,15 +146,16 @@ app.get('/api/ratings/month/:year/:month', auth, async (req, res) => {
   const startDate = `${year}-${month.padStart(2, '0')}-01`;
   const endDate = `${year}-${month.padStart(2, '0')}-${lastDay.toString().padStart(2, '0')}`;
   
-  console.log(`Query: user=${req.userId}, from=${startDate}, to=${endDate}`);
-  
   try {
     const result = await client.query(
       'SELECT date, rating FROM ratings WHERE user_id = $1 AND date BETWEEN $2 AND $3 ORDER BY date',
       [req.userId, startDate, endDate]
     );
-    console.log(`Found ${result.rows.length} ratings`);
-    res.json(result.rows);
+    const formattedRows = result.rows.map(row => ({
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : row.date,
+      rating: row.rating
+    }));
+    res.json(formattedRows);
   } finally {
     client.release();
   }
@@ -248,7 +247,11 @@ app.get('/api/users/:userId/ratings/:year/:month', auth, async (req, res) => {
       'SELECT date, rating FROM ratings WHERE user_id = $1 AND date BETWEEN $2 AND $3 ORDER BY date',
       [userId, startDate, endDate]
     );
-    res.json(result.rows);
+    const formattedRows = result.rows.map(row => ({
+      date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : row.date,
+      rating: row.rating
+    }));
+    res.json(formattedRows);
   } finally {
     client.release();
   }
