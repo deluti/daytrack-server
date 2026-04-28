@@ -7,7 +7,6 @@ require('dotenv').config();
 
 const app = express();
 
-// ========== CORS ==========
 app.use(cors({
   origin: '*',
   credentials: true,
@@ -17,7 +16,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// ========== ПОДКЛЮЧЕНИЕ К POSTGRESQL ==========
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -25,7 +23,6 @@ const pool = new Pool({
   }
 });
 
-// ========== СОЗДАНИЕ ТАБЛИЦ ==========
 async function initDb() {
   const client = await pool.connect();
   try {
@@ -60,7 +57,11 @@ async function initDb() {
   }
 }
 
-// Middleware для проверки токена
+// Функция получения последнего дня месяца
+function getLastDayOfMonth(year, month) {
+  return new Date(year, month, 0).getDate();
+}
+
 async function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Нет токена' });
@@ -74,33 +75,18 @@ async function auth(req, res, next) {
   }
 }
 
-// ========== ТЕСТОВЫЕ МАРШРУТЫ ==========
 app.get('/api/test', (req, res) => {
   res.json({ message: 'Сервер работает!', status: 'ok', time: new Date().toISOString() });
 });
 
 app.get('/', (req, res) => {
-  res.json({ 
-    message: 'DayTrack API сервер работает', 
-    endpoints: [
-      'GET /api/test',
-      'POST /api/auth/register', 
-      'POST /api/auth/login',
-      'GET /api/users/search?q=username',
-      'GET /api/users/:userId/profile',
-      'GET /api/user/progress',
-      'POST /api/user/progress'
-    ]
-  });
+  res.json({ message: 'DayTrack API сервер работает' });
 });
-
-// ========== АУТЕНТИФИКАЦИЯ ==========
 
 // РЕГИСТРАЦИЯ
 app.post('/api/auth/register', async (req, res) => {
   const { username, password } = req.body;
   const client = await pool.connect();
-  
   const hashedPassword = await bcrypt.hash(password, 10);
   
   try {
@@ -130,10 +116,7 @@ app.post('/api/auth/login', async (req, res) => {
   const client = await pool.connect();
   
   try {
-    const result = await client.query(
-      'SELECT * FROM users WHERE username = $1',
-      [username]
-    );
+    const result = await client.query('SELECT * FROM users WHERE username = $1', [username]);
     const user = result.rows[0];
     if (!user) return res.status(401).json({ error: 'Неверные данные' });
     
@@ -146,8 +129,6 @@ app.post('/api/auth/login', async (req, res) => {
     client.release();
   }
 });
-
-// ========== ОЦЕНКИ ==========
 
 // СОХРАНИТЬ ОЦЕНКУ
 app.post('/api/ratings/rate', auth, async (req, res) => {
@@ -169,13 +150,17 @@ app.post('/api/ratings/rate', auth, async (req, res) => {
   }
 });
 
-// ПОЛУЧИТЬ ОЦЕНКИ ЗА МЕСЯЦ
+// ПОЛУЧИТЬ ОЦЕНКИ ЗА МЕСЯЦ (ИСПРАВЛЕНО)
 app.get('/api/ratings/month/:year/:month', auth, async (req, res) => {
   const { year, month } = req.params;
   const client = await pool.connect();
   
+  const monthNum = parseInt(month);
+  const yearNum = parseInt(year);
+  const lastDay = getLastDayOfMonth(yearNum, monthNum);
+  
   const startDate = `${year}-${month.padStart(2, '0')}-01`;
-  const endDate = `${year}-${month.padStart(2, '0')}-31`;
+  const endDate = `${year}-${month.padStart(2, '0')}-${lastDay.toString().padStart(2, '0')}`;
   
   try {
     const result = await client.query(
@@ -206,8 +191,6 @@ app.get('/api/ratings/stats', auth, async (req, res) => {
   }
 });
 
-// ========== ПРОФИЛЬ ==========
-
 // ОБНОВИТЬ ПРОФИЛЬ
 app.put('/api/user/profile', auth, async (req, res) => {
   const { username, avatar } = req.body;
@@ -229,10 +212,7 @@ app.put('/api/user/profile', auth, async (req, res) => {
       await client.query('UPDATE users SET avatar = $1 WHERE id = $2', [avatar, req.userId]);
     }
     
-    const result = await client.query(
-      'SELECT id, username, avatar FROM users WHERE id = $1',
-      [req.userId]
-    );
+    const result = await client.query('SELECT id, username, avatar FROM users WHERE id = $1', [req.userId]);
     res.json({ success: true, user: result.rows[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -240,8 +220,6 @@ app.put('/api/user/profile', auth, async (req, res) => {
     client.release();
   }
 });
-
-// ========== ПРОСМОТР ДРУГИХ ПОЛЬЗОВАТЕЛЕЙ ==========
 
 // ПОИСК ПОЛЬЗОВАТЕЛЕЙ
 app.get('/api/users/search', auth, async (req, res) => {
@@ -270,16 +248,13 @@ app.get('/api/users/search', auth, async (req, res) => {
   }
 });
 
-// Получить публичный профиль пользователя
+// Профиль пользователя
 app.get('/api/users/:userId/profile', auth, async (req, res) => {
   const { userId } = req.params;
   const client = await pool.connect();
   
   try {
-    const userResult = await client.query(
-      'SELECT id, username, avatar FROM users WHERE id = $1',
-      [userId]
-    );
+    const userResult = await client.query('SELECT id, username, avatar FROM users WHERE id = $1', [userId]);
     if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
@@ -301,13 +276,17 @@ app.get('/api/users/:userId/profile', auth, async (req, res) => {
   }
 });
 
-// Получить оценки пользователя за месяц
+// Оценки пользователя за месяц (ИСПРАВЛЕНО)
 app.get('/api/users/:userId/ratings/:year/:month', auth, async (req, res) => {
   const { userId, year, month } = req.params;
   const client = await pool.connect();
   
+  const monthNum = parseInt(month);
+  const yearNum = parseInt(year);
+  const lastDay = getLastDayOfMonth(yearNum, monthNum);
+  
   const startDate = `${year}-${month.padStart(2, '0')}-01`;
-  const endDate = `${year}-${month.padStart(2, '0')}-31`;
+  const endDate = `${year}-${month.padStart(2, '0')}-${lastDay.toString().padStart(2, '0')}`;
   
   try {
     const result = await client.query(
@@ -320,9 +299,7 @@ app.get('/api/users/:userId/ratings/:year/:month', auth, async (req, res) => {
   }
 });
 
-// ========== ПРОГРЕСС (ОЧКИ И УРОВНИ) ==========
-
-// Получить прогресс пользователя
+// ПРОГРЕСС
 app.get('/api/user/progress', auth, async (req, res) => {
   const client = await pool.connect();
   
@@ -346,7 +323,6 @@ app.get('/api/user/progress', auth, async (req, res) => {
   }
 });
 
-// Обновить прогресс пользователя
 app.post('/api/user/progress', auth, async (req, res) => {
   const { points, level, last_rated_date } = req.body;
   const client = await pool.connect();
@@ -367,23 +343,19 @@ app.post('/api/user/progress', auth, async (req, res) => {
   }
 });
 
-// Получить прогресс другого пользователя
 app.get('/api/users/:userId/progress', auth, async (req, res) => {
   const { userId } = req.params;
   const client = await pool.connect();
   
   try {
-    const result = await client.query(
-      'SELECT points, level FROM user_progress WHERE user_id = $1',
-      [userId]
-    );
+    const result = await client.query('SELECT points, level FROM user_progress WHERE user_id = $1', [userId]);
     res.json(result.rows[0] || { points: 0, level: 1 });
   } finally {
     client.release();
   }
 });
 
-// ========== ЗАПУСК СЕРВЕРА ==========
+// ========== ЗАПУСК ==========
 const PORT = process.env.PORT || 5000;
 initDb().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
