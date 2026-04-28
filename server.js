@@ -26,7 +26,6 @@ function getLastDayOfMonth(year, month) {
   return new Date(year, month, 0).getDate();
 }
 
-// Генерация кода премиум
 function generatePremiumCode() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let code = '';
@@ -40,14 +39,13 @@ function generatePremiumCode() {
 async function initDb() {
   const client = await pool.connect();
   try {
-    // Существующие таблицы
+    // Создание основных таблиц
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
         avatar TEXT DEFAULT '😊',
-        is_premium BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       
@@ -56,7 +54,6 @@ async function initDb() {
         user_id INTEGER NOT NULL REFERENCES users(id),
         date DATE NOT NULL,
         rating REAL NOT NULL,
-        note TEXT,
         UNIQUE(user_id, date)
       );
       
@@ -67,35 +64,66 @@ async function initDb() {
         level INTEGER DEFAULT 1,
         last_rated_date TEXT
       );
-      
-      -- Новая таблица для друзей
+    `);
+
+    // Добавление колонки is_premium в users (безопасно)
+    await client.query(`
+      DO $$ 
+      BEGIN
+        BEGIN
+            ALTER TABLE users ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;
+        EXCEPTION
+            WHEN duplicate_column THEN RAISE NOTICE 'Column is_premium already exists, skipping...';
+        END;
+      END $$;
+    `);
+
+    // Добавление колонки note в ratings (безопасно)
+    await client.query(`
+      DO $$ 
+      BEGIN
+        BEGIN
+            ALTER TABLE ratings ADD COLUMN note TEXT;
+        EXCEPTION
+            WHEN duplicate_column THEN RAISE NOTICE 'Column note already exists, skipping...';
+        END;
+      END $$;
+    `);
+
+    // Создание таблицы избранного
+    await client.query(`
       CREATE TABLE IF NOT EXISTS favorites (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        favorite_id INTEGER NOT NULL REFERENCES users(id),
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        favorite_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(user_id, favorite_id)
       );
-      
-      -- Новая таблица для премиум кодов
+    `);
+
+    // Создание таблицы премиум кодов
+    await client.query(`
       CREATE TABLE IF NOT EXISTS premium_codes (
         id SERIAL PRIMARY KEY,
         code TEXT UNIQUE NOT NULL,
-        used_by INTEGER DEFAULT NULL,
+        used_by INTEGER DEFAULT NULL REFERENCES users(id) ON DELETE SET NULL,
         used_at TIMESTAMP DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-      
-      -- Новая таблица для админов
+    `);
+
+    // Создание таблицы админов
+    await client.query(`
       CREATE TABLE IF NOT EXISTS admins (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) UNIQUE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log('✅ Таблицы созданы');
+
+    console.log('✅ База данных инициализирована/обновлена');
     
-    // Создание админа если нет (пароль: ADMIN2024)
+    // Создание администратора если нет (пароль: ADMIN2024)
     const adminResult = await client.query('SELECT * FROM users WHERE username = $1', ['Admin']);
     if (adminResult.rows.length === 0) {
       const hashedPassword = await bcrypt.hash('ADMIN2024', 10);
@@ -104,6 +132,7 @@ async function initDb() {
         ['Admin', hashedPassword, '👑', true]
       );
       await client.query('INSERT INTO admins (user_id) VALUES ($1)', [result.rows[0].id]);
+      console.log('✅ Администратор создан');
     }
   } finally {
     client.release();
@@ -179,7 +208,7 @@ app.post('/api/auth/login', async (req, res) => {
         id: user.id, 
         username: user.username, 
         avatar: user.avatar,
-        is_premium: user.is_premium 
+        is_premium: user.is_premium || false
       } 
     });
   } finally {
@@ -189,13 +218,11 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ========== ПРЕМИУМ ==========
 
-// Активация премиум кода
 app.post('/api/premium/activate', auth, async (req, res) => {
   const { code } = req.body;
   const client = await pool.connect();
   
   try {
-    // Проверяем код
     const codeResult = await client.query(
       'SELECT * FROM premium_codes WHERE code = $1 AND used_by IS NULL',
       [code.toUpperCase()]
@@ -205,10 +232,7 @@ app.post('/api/premium/activate', auth, async (req, res) => {
       return res.status(400).json({ error: 'Неверный или уже использованный код' });
     }
     
-    // Активируем премиум для пользователя
     await client.query('UPDATE users SET is_premium = TRUE WHERE id = $1', [req.userId]);
-    
-    // Отмечаем код как использованный
     await client.query(
       'UPDATE premium_codes SET used_by = $1, used_at = NOW() WHERE code = $2',
       [req.userId, code.toUpperCase()]
@@ -220,7 +244,6 @@ app.post('/api/premium/activate', auth, async (req, res) => {
   }
 });
 
-// Обновление аватара
 app.put('/api/user/avatar', auth, async (req, res) => {
   const { avatar } = req.body;
   const client = await pool.connect();
@@ -234,13 +257,11 @@ app.put('/api/user/avatar', auth, async (req, res) => {
 
 // ========== АДМИН ==========
 
-// Проверка админа
 app.get('/api/admin/check', auth, async (req, res) => {
   const admin = await isAdmin(req.userId);
   res.json({ isAdmin: admin });
 });
 
-// Генерация премиум кодов (только для админа)
 app.post('/api/admin/generate-codes', auth, async (req, res) => {
   const admin = await isAdmin(req.userId);
   if (!admin) return res.status(403).json({ error: 'Доступ запрещен' });
@@ -263,7 +284,6 @@ app.post('/api/admin/generate-codes', auth, async (req, res) => {
 
 // ========== ДРУЗЬЯ (ИЗБРАННОЕ) ==========
 
-// Добавить в избранное
 app.post('/api/favorites/add', auth, async (req, res) => {
   const { favoriteId } = req.body;
   const client = await pool.connect();
@@ -278,7 +298,6 @@ app.post('/api/favorites/add', auth, async (req, res) => {
   }
 });
 
-// Удалить из избранного
 app.post('/api/favorites/remove', auth, async (req, res) => {
   const { favoriteId } = req.body;
   const client = await pool.connect();
@@ -293,7 +312,6 @@ app.post('/api/favorites/remove', auth, async (req, res) => {
   }
 });
 
-// Получить список избранных
 app.get('/api/favorites', auth, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -313,7 +331,6 @@ app.get('/api/favorites', auth, async (req, res) => {
   }
 });
 
-// Проверка в избранном
 app.get('/api/favorites/check/:userId', auth, async (req, res) => {
   const { userId } = req.params;
   const client = await pool.connect();
@@ -396,7 +413,6 @@ app.get('/api/users/search', auth, async (req, res) => {
   const client = await pool.connect();
   
   if (!q || q.length < 2) {
-    // Если нет поискового запроса, возвращаем избранных
     const favorites = await client.query(
       `SELECT u.id, u.username, u.avatar, u.is_premium,
               COALESCE(up.points, 0) as points, COALESCE(up.level, 1) as level,
@@ -537,7 +553,6 @@ app.get('/api/users/:userId/progress', auth, async (req, res) => {
   }
 });
 
-// Обновление профиля
 app.put('/api/user/profile', auth, async (req, res) => {
   const { username, avatar } = req.body;
   const client = await pool.connect();
